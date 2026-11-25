@@ -22,6 +22,8 @@ class Workflows(unittest.TestCase):
         self.assertEqual(wave.run(self.db,dict(op='release',id='w',transition='t2',node='n',zone='z',zone_budget=1))['reason'],'availability_budget')
         wave.run(self.db,dict(op='plan',id='next',target='1.31',parent='w',max_unavailable=1))
         self.assertEqual(wave.run(self.db,dict(op='release',id='next',transition='t3',node='n',zone='z',zone_budget=1))['reason'],'parent_incomplete')
+        self.assertEqual(wave.run(self.db,dict(op='finish',id='w',transition='t'))['decision'],'complete')
+        self.assertEqual(self.db.execute("SELECT version FROM nodes WHERE id='n'").fetchone()[0],'1.30')
     def test_migration_freeze_and_rollback(self):
         self.base();wave.run(self.db,dict(op='plan',id='w',target='1.30',max_unavailable=1))
         self.assertEqual(migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',expected='healthy',observed='broken'))['decision'],'rejected')

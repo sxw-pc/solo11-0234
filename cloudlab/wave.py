@@ -28,7 +28,10 @@ def run(db,x):
         if x['op']=='finish':
             row=db.execute('SELECT * FROM transitions WHERE id=?',(x['transition'],)).fetchone()
             if not row:return {'decision':'blocked','reason':'unknown_transition'}
+            if row['wave_id']!=x['id']:return {'decision':'blocked','reason':'wrong_wave'}
+            if row['state']=='complete':return {'decision':'reused','state':'complete'}
             db.execute("UPDATE transitions SET state='complete' WHERE id=?",(x['transition'],))
+            db.execute('UPDATE nodes SET version=?,verified_at=NULL WHERE id=?',(wave['target'],row['node_id']))
             left=db.execute("SELECT COUNT(*) FROM transitions WHERE wave_id=? AND state='applying'",(x['id'],)).fetchone()[0]
             if left==0:db.execute("UPDATE waves SET state='complete' WHERE id=?",(x['id'],))
             record(db,'wave',x['transition'],'finish',2,x)
