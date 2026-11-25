@@ -1,0 +1,25 @@
+[
+  {
+    "op": "node",
+    "id": "n1",
+    "architecture": "amd64",
+    "features": [
+      "cgroup2"
+    ],
+    "generation": 1,
+    "observed_at": 10,
+    "version": "1.29",
+    "zone": "z1"
+  },
+  {
+    "op": "verify",
+    "id": "n1",
+    "now": 12,
+    "max_age": 10,
+    "architecture": "amd64",
+    "features": [
+      "cgroup2"
+    ],
+    "deprecated_api": "old/v1"
+  }
+]
