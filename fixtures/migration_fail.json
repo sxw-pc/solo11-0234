@@ -2,6 +2,7 @@
   "op": "anchor",
   "id": "a0",
   "migration": "missing",
+  "node": "n1",
   "node_version": "1.29",
   "config_version": "cfg3"
 }

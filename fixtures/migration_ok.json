@@ -12,6 +12,7 @@
     "op": "anchor",
     "id": "a1",
     "migration": "m1",
+    "node": "n1",
     "node_version": "1.29",
     "config_version": "cfg3"
   },

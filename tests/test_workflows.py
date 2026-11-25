@@ -28,8 +28,10 @@ class Workflows(unittest.TestCase):
         self.base();wave.run(self.db,dict(op='plan',id='w',target='1.30',max_unavailable=1))
         self.assertEqual(migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',expected='healthy',observed='broken'))['decision'],'rejected')
         self.assertEqual(wave.run(self.db,dict(op='release',id='w',transition='t',node='n',zone='z',zone_budget=1))['reason'],'migration_failed')
-        self.assertEqual(migration.run(self.db,dict(op='anchor',id='a',migration='m',node_version='1.29',config_version='cfg1'))['decision'],'ready')
+        self.assertEqual(migration.run(self.db,dict(op='anchor',id='a',migration='m',node='n',node_version='1.29',config_version='cfg1'))['decision'],'ready')
         self.assertEqual(migration.run(self.db,dict(op='rollback',id='a'))['decision'],'rolled_back')
+        self.assertEqual(self.db.execute("SELECT version FROM nodes WHERE id='n'").fetchone()[0],'1.29')
+        self.assertEqual(self.db.execute("SELECT version FROM workload_configs WHERE workload='web'").fetchone()[0],'cfg1')
         self.assertTrue(any(x['event']=='rollback' for x in report(self.db)))
 
     def test_evidence_replays_migration_and_wave(self):
@@ -64,7 +66,7 @@ class Workflows(unittest.TestCase):
         self.assertEqual(wave.run(self.db,dict(op='release',id='w',transition='t',node='n',zone='z',zone_budget=1))['decision'],'released')
     def test_incomplete_rollback_anchor_is_rejected(self):
         self.base();migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',expected='healthy',observed='broken'))
-        self.assertEqual(migration.run(self.db,dict(op='anchor',id='a',migration='m',node_version='1.29',config_version=''))['reason'],'incomplete_anchor')
+        self.assertEqual(migration.run(self.db,dict(op='anchor',id='a',migration='m',node='n',node_version='1.29',config_version=''))['reason'],'incomplete_anchor')
         self.assertEqual(migration.run(self.db,dict(op='rollback',id='a'))['reason'],'missing_anchor')
 
 print('imported_module_file=',cloudlab.__file__)
