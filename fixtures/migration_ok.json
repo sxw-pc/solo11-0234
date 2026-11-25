@@ -5,8 +5,22 @@
     "workload": "web",
     "old_api": "old/v1",
     "new_api": "new/v2",
-    "expected": "healthy",
-    "observed": "healthy"
+    "old_manifest": {
+      "replicas": 3,
+      "minAvailable": 2,
+      "selector": {
+        "app": "web"
+      }
+    },
+    "new_manifest": {
+      "desiredReplicas": 3,
+      "availability": {
+        "minimumReady": 2
+      },
+      "selector": {
+        "app": "web"
+      }
+    }
   },
   {
     "op": "anchor",

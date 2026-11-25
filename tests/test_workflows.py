@@ -5,6 +5,10 @@ import cloudlab
 from cloudlab.store import connect,report,replay
 from cloudlab import inventory,wave,migration
 
+OLD={'replicas':3,'minAvailable':2,'selector':{'app':'web'}}
+GOOD={'desiredReplicas':3,'availability':{'minimumReady':2},'selector':{'app':'web'}}
+BAD={'desiredReplicas':2,'availability':{'minimumReady':2},'selector':{'app':'web'}}
+
 class Workflows(unittest.TestCase):
     def setUp(self):self.tmp=tempfile.TemporaryDirectory();self.db=connect(str(Path(self.tmp.name)/'x.sqlite'))
     def tearDown(self):self.db.close();self.tmp.cleanup()
@@ -26,17 +30,24 @@ class Workflows(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT version FROM nodes WHERE id='n'").fetchone()[0],'1.30')
     def test_migration_freeze_and_rollback(self):
         self.base();wave.run(self.db,dict(op='plan',id='w',target='1.30',max_unavailable=1))
-        self.assertEqual(migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',expected='healthy',observed='broken'))['decision'],'rejected')
+        self.assertEqual(migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',old_manifest=OLD,new_manifest=BAD))['decision'],'rejected')
         self.assertEqual(wave.run(self.db,dict(op='release',id='w',transition='t',node='n',zone='z',zone_budget=1))['reason'],'migration_failed')
         self.assertEqual(migration.run(self.db,dict(op='anchor',id='a',migration='m',node='n',node_version='1.29',config_version='cfg1'))['decision'],'ready')
         self.assertEqual(migration.run(self.db,dict(op='rollback',id='a'))['decision'],'rolled_back')
         self.assertEqual(self.db.execute("SELECT version FROM nodes WHERE id='n'").fetchone()[0],'1.29')
         self.assertEqual(self.db.execute("SELECT version FROM workload_configs WHERE workload='web'").fetchone()[0],'cfg1')
         self.assertTrue(any(x['event']=='rollback' for x in report(self.db)))
+    def test_api_defaults_change_real_workload_result(self):
+        self.base()
+        old={'replicas':3,'selector':{'app':'web'}}
+        new={'desiredReplicas':3,'selector':{'app':'web'}}
+        self.assertEqual(migration.run(self.db,dict(op='verify',id='defaults',workload='web',old_api='old/v1',new_api='new/v2',old_manifest=old,new_manifest=new))['decision'],'rejected')
+        row=self.db.execute("SELECT expected,observed FROM migrations WHERE id='defaults'").fetchone()
+        self.assertNotEqual(row['expected'],row['observed'])
 
     def test_evidence_replays_migration_and_wave(self):
         self.base();wave.run(self.db,dict(op='plan',id='w',target='1.30',max_unavailable=1))
-        migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',expected='healthy',observed='broken'))
+        migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',old_manifest=OLD,new_manifest=BAD))
         wave.run(self.db,dict(op='release',id='w',transition='t',node='n',zone='z',zone_budget=1))
         result=replay(str(Path(self.tmp.name)/'x.sqlite'),{'inventory':inventory,'wave':wave,'migration':migration})
         self.assertTrue(result['verified'],result['divergences'])
@@ -62,10 +73,10 @@ class Workflows(unittest.TestCase):
         self.base();inventory.run(self.db,dict(op='usage',id='u',workload='web',api='old/v1',generation=1))
         wave.run(self.db,dict(op='plan',id='w',target='1.30',max_unavailable=1))
         self.assertEqual(inventory.run(self.db,dict(op='verify',id='n',now=13,max_age=10,architecture='amd64',features=['cgroup2'],deprecated_api='old/v1'))['reason'],'deprecated_api')
-        migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',expected='healthy',observed='healthy'))
+        migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',old_manifest=OLD,new_manifest=GOOD))
         self.assertEqual(wave.run(self.db,dict(op='release',id='w',transition='t',node='n',zone='z',zone_budget=1))['decision'],'released')
     def test_incomplete_rollback_anchor_is_rejected(self):
-        self.base();migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',expected='healthy',observed='broken'))
+        self.base();migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',old_manifest=OLD,new_manifest=BAD))
         self.assertEqual(migration.run(self.db,dict(op='anchor',id='a',migration='m',node='n',node_version='1.29',config_version=''))['reason'],'incomplete_anchor')
         self.assertEqual(migration.run(self.db,dict(op='rollback',id='a'))['reason'],'missing_anchor')
 

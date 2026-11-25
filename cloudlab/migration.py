@@ -1,12 +1,16 @@
+import json
 from .store import transaction,record,audit_run
+from .compat import effective
 
 @audit_run('migration')
 def run(db,x):
     with transaction(db):
         if x['op']=='verify':
-            state='verified' if x['expected']==x['observed'] else 'rejected'
+            expected=json.dumps(effective(x['old_manifest'],x['old_api']),sort_keys=True)
+            observed=json.dumps(effective(x['new_manifest'],x['new_api']),sort_keys=True)
+            state='verified' if expected==observed else 'rejected'
             db.execute('INSERT INTO migrations VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET observed=excluded.observed,state=excluded.state',
-                       (x['id'],x['workload'],x['old_api'],x['new_api'],x['expected'],x['observed'],state))
+                       (x['id'],x['workload'],x['old_api'],x['new_api'],expected,observed,state))
             if state=='verified':
                 db.execute('INSERT INTO workload_configs VALUES(?,?,?) ON CONFLICT(workload) DO UPDATE SET version=excluded.version,state=excluded.state',(x['workload'],x.get('new_config_version','migrated'),'active'))
             db.execute("UPDATE api_usage SET state='migrated' WHERE workload=? AND api=? AND ?='verified'",(x['workload'],x['old_api'],state))
