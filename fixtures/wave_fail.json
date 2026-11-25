@@ -1,8 +1,4 @@
-{
-  "op": "release",
-  "id": "absent",
-  "transition": "t2",
-  "node": "n1",
-  "zone": "z1",
-  "zone_budget": 1
-}
+[
+  {"op":"plan","id":"wrong-zone-wave","target":"1.30","max_unavailable":1,"zone_budgets":{"z1":1}},
+  {"op":"release","id":"wrong-zone-wave","transition":"wrong-zone-transition","node":"n1","zone":"spoofed","zone_budget":99}
+]

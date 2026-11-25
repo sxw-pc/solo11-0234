@@ -14,6 +14,16 @@
     "zone_budget": 1
   },
   {
+    "op": "probe",
+    "id": "wave1",
+    "transition": "t1",
+    "probe": "probe1",
+    "generation": 1,
+    "target": "1.30",
+    "at": 13,
+    "healthy": true
+  },
+  {
     "op": "finish",
     "id": "wave1",
     "transition": "t1"

@@ -15,6 +15,7 @@ class Workflows(unittest.TestCase):
     def base(self):
         inventory.run(self.db,dict(op='node',id='n',architecture='amd64',features=['cgroup2'],generation=1,observed_at=10,version='1.29'))
         inventory.run(self.db,dict(op='verify',id='n',now=12,max_age=10,architecture='amd64',features=['cgroup2'],deprecated_api='old/v1'))
+        migration.run(self.db,dict(op='config',workload='web',version='cfg1'))
     def test_inventory_staleness_and_usage(self):
         self.base()
         self.assertEqual(inventory.run(self.db,dict(op='verify',id='n',now=100,max_age=10,architecture='amd64',features=['cgroup2'],deprecated_api='old/v1'))['reason'],'stale_observation')
@@ -26,6 +27,8 @@ class Workflows(unittest.TestCase):
         self.assertEqual(wave.run(self.db,dict(op='release',id='w',transition='t2',node='n',zone='z',zone_budget=1))['reason'],'availability_budget')
         wave.run(self.db,dict(op='plan',id='next',target='1.31',parent='w',max_unavailable=1))
         self.assertEqual(wave.run(self.db,dict(op='release',id='next',transition='t3',node='n',zone='z',zone_budget=1))['reason'],'parent_incomplete')
+        self.assertEqual(wave.run(self.db,dict(op='finish',id='w',transition='t'))['reason'],'target_health_unverified')
+        wave.run(self.db,dict(op='probe',id='w',transition='t',probe='p',generation=1,target='1.30',at=13,healthy=True))
         self.assertEqual(wave.run(self.db,dict(op='finish',id='w',transition='t'))['decision'],'complete')
         self.assertEqual(self.db.execute("SELECT version FROM nodes WHERE id='n'").fetchone()[0],'1.30')
     def test_migration_freeze_and_rollback(self):
@@ -79,6 +82,43 @@ class Workflows(unittest.TestCase):
         self.base();migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',old_manifest=OLD,new_manifest=BAD))
         self.assertEqual(migration.run(self.db,dict(op='anchor',id='a',migration='m',node='n',node_version='1.29',config_version=''))['reason'],'incomplete_anchor')
         self.assertEqual(migration.run(self.db,dict(op='rollback',id='a'))['reason'],'missing_anchor')
+
+    def test_spoofed_zone_and_budget_cannot_bypass_persisted_guard(self):
+        self.base()
+        inventory.run(self.db,dict(op='node',id='n2',architecture='amd64',features=['cgroup2'],generation=1,observed_at=10,version='1.29',zone='z'))
+        inventory.run(self.db,dict(op='verify',id='n2',now=12,max_age=10,architecture='amd64',features=['cgroup2'],deprecated_api='old/v1'))
+        wave.run(self.db,dict(op='plan',id='w',target='1.30',max_unavailable=2,zone_budgets={'z':1}))
+        self.assertEqual(wave.run(self.db,dict(op='release',id='w',transition='t1',node='n',zone='z',zone_budget=99))['decision'],'released')
+        self.assertEqual(wave.run(self.db,dict(op='release',id='w',transition='t2',node='n2',zone='other',zone_budget=99))['reason'],'zone_identity_conflict')
+        self.assertEqual(wave.run(self.db,dict(op='release',id='w',transition='t2',node='n2',zone='z',zone_budget=99))['reason'],'availability_budget')
+
+    def test_anchor_uses_observed_versions_and_migration_unblocks_inventory(self):
+        self.base()
+        inventory.run(self.db,dict(op='usage',id='u',workload='web',api='old/v1',generation=2))
+        self.assertEqual(inventory.run(self.db,dict(op='usage',id='u',workload='web',api='old/v1',generation=1))['reason'],'stale_usage_generation')
+        migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',old_manifest=OLD,new_manifest=GOOD))
+        self.assertEqual(inventory.run(self.db,dict(op='verify',id='n',now=13,max_age=10,architecture='amd64',features=['cgroup2'],deprecated_api='old/v1'))['decision'],'verified')
+        self.assertEqual(migration.run(self.db,dict(op='anchor',id='fake',migration='m',node='n',node_version='9.99',config_version='cfg1'))['reason'],'anchor_version_mismatch')
+        self.assertEqual(migration.run(self.db,dict(op='anchor',id='fake2',migration='m',node='n',node_version='1.29',config_version='forged'))['reason'],'anchor_version_mismatch')
+        self.assertEqual(migration.run(self.db,dict(op='anchor',id='real',migration='m',node='n',node_version='1.29',config_version='cfg1'))['decision'],'ready')
+
+    def test_paired_rollback_restores_node_config_and_api_gate(self):
+        self.base()
+        inventory.run(self.db,dict(op='usage',id='u',workload='web',api='old/v1',generation=1))
+        migration.run(self.db,dict(op='verify',id='m',workload='web',old_api='old/v1',new_api='new/v2',old_manifest=OLD,new_manifest=GOOD))
+        migration.run(self.db,dict(op='anchor',id='a',migration='m',node='n',node_version='1.29',config_version='cfg1'))
+        wave.run(self.db,dict(op='plan',id='w',target='1.30',max_unavailable=1))
+        self.assertEqual(wave.run(self.db,dict(op='release',id='w',transition='t',node='n',zone='z'))['decision'],'released')
+        wave.run(self.db,dict(op='probe',id='w',transition='t',probe='bad',generation=1,target='1.30',at=13,healthy=False))
+        self.assertEqual(wave.run(self.db,dict(op='finish',id='w',transition='t'))['reason'],'target_health_unverified')
+        wave.run(self.db,dict(op='probe',id='w',transition='t',probe='good',generation=1,target='1.30',at=14,healthy=True))
+        self.assertEqual(wave.run(self.db,dict(op='finish',id='w',transition='t'))['decision'],'complete')
+        self.assertEqual(migration.run(self.db,dict(op='rollback',id='a'))['decision'],'rolled_back')
+        self.assertEqual(self.db.execute("SELECT version FROM nodes WHERE id='n'").fetchone()[0],'1.29')
+        self.assertEqual(self.db.execute("SELECT version FROM workload_configs WHERE workload='web'").fetchone()[0],'cfg1')
+        self.assertEqual(self.db.execute("SELECT state FROM api_usage WHERE id='u'").fetchone()[0],'observed')
+        wave.run(self.db,dict(op='plan',id='again',target='1.30',max_unavailable=1))
+        self.assertEqual(wave.run(self.db,dict(op='release',id='again',transition='t2',node='n',zone='z'))['reason'],'deprecated_api_pending')
 
 assert Path(cloudlab.__file__).resolve().is_relative_to(Path(__file__).resolve().parents[1])
 print('imported_module_file=',cloudlab.__file__)

@@ -22,10 +22,13 @@ def main():
         result=replay(args.db,{name:globals()[name] for name in ["inventory","wave","migration"]})
     elif args.command=='demo':
         result=[]
-        for name in ["inventory","wave","migration"]:
-            for file in sorted(Path('fixtures').glob(name+'_*.json')):
-                payload=json.loads(file.read_text(encoding='utf-8'))
-                result.append({'fixture':str(file),'result':invoke(globals()[name],payload)})
+        for name,filename in [
+            ('inventory','inventory_ok.json'),('inventory','inventory_fail.json'),
+            ('migration','migration_ok.json'),('wave','wave_fail.json'),
+            ('wave','wave_ok.json'),('migration','migration_fail.json')]:
+            file=Path('fixtures')/filename
+            payload=json.loads(file.read_text(encoding='utf-8'))
+            result.append({'fixture':str(file),'result':invoke(globals()[name],payload)})
     else:
         if not args.fixture: parser.error('--fixture is required')
         payload=json.loads(Path(args.fixture).read_text(encoding='utf-8'))
