@@ -1,0 +1,11 @@
+{
+  "op": "verify",
+  "id": "n1",
+  "now": 100,
+  "max_age": 10,
+  "architecture": "amd64",
+  "features": [
+    "cgroup2"
+  ],
+  "deprecated_api": "old/v1"
+}

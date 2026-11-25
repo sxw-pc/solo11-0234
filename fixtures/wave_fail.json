@@ -1,0 +1,8 @@
+{
+  "op": "release",
+  "id": "absent",
+  "transition": "t2",
+  "node": "n1",
+  "zone": "z1",
+  "zone_budget": 1
+}

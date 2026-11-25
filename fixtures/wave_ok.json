@@ -1,0 +1,21 @@
+[
+  {
+    "op": "plan",
+    "id": "wave1",
+    "target": "1.30",
+    "max_unavailable": 1
+  },
+  {
+    "op": "release",
+    "id": "wave1",
+    "transition": "t1",
+    "node": "n1",
+    "zone": "z1",
+    "zone_budget": 1
+  },
+  {
+    "op": "finish",
+    "id": "wave1",
+    "transition": "t1"
+  }
+]
