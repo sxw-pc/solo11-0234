@@ -44,6 +44,16 @@ class Workflows(unittest.TestCase):
         inventory.run(self.db,dict(op='node',id='n',architecture='amd64',features=['cgroup2'],generation=1,observed_at=10,version='1.29'))
         wave.run(self.db,dict(op='plan',id='w',target='1.30',max_unavailable=1))
         self.assertEqual(wave.run(self.db,dict(op='release',id='w',transition='t',node='n',zone='z',zone_budget=1))['reason'],'unverified_node')
+    def test_wave_retry_resumes_without_consuming_budget_twice(self):
+        self.base();wave.run(self.db,dict(op='plan',id='w',target='1.30',max_unavailable=1))
+        payload=dict(op='release',id='w',transition='t',node='n',zone='z',zone_budget=1)
+        self.assertEqual(wave.run(self.db,payload)['decision'],'released')
+        self.assertEqual(wave.run(self.db,payload)['decision'],'reused')
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM transitions WHERE id='t'").fetchone()[0],1)
+    def test_unmigrated_api_blocks_wave_after_new_scan(self):
+        self.base();wave.run(self.db,dict(op='plan',id='w',target='1.30',max_unavailable=1))
+        inventory.run(self.db,dict(op='usage',id='u',workload='web',api='old/v1',generation=1))
+        self.assertEqual(wave.run(self.db,dict(op='release',id='w',transition='t',node='n',zone='z',zone_budget=1))['reason'],'deprecated_api_pending')
     def test_migration_clears_deprecated_api_and_unfreezes_wave(self):
         self.base();inventory.run(self.db,dict(op='usage',id='u',workload='web',api='old/v1',generation=1))
         wave.run(self.db,dict(op='plan',id='w',target='1.30',max_unavailable=1))
