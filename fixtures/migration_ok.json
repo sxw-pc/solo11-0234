@@ -1,0 +1,38 @@
+[
+  {
+    "op": "config",
+    "workload": "web",
+    "version": "cfg3"
+  },
+  {
+    "op": "verify",
+    "id": "m1",
+    "workload": "web",
+    "old_api": "old/v1",
+    "new_api": "new/v2",
+    "old_manifest": {
+      "replicas": 3,
+      "minAvailable": 2,
+      "selector": {
+        "app": "web"
+      }
+    },
+    "new_manifest": {
+      "desiredReplicas": 3,
+      "availability": {
+        "minimumReady": 2
+      },
+      "selector": {
+        "app": "web"
+      }
+    }
+  },
+  {
+    "op": "anchor",
+    "id": "a1",
+    "migration": "m1",
+    "node": "n1",
+    "node_version": "1.29",
+    "config_version": "cfg3"
+  }
+]
