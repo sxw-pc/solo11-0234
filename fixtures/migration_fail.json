@@ -1,0 +1,4 @@
+[
+  {"op":"config","workload":"bad-web","version":"cfg-bad"},
+  {"op":"verify","id":"bad-migration","workload":"bad-web","old_api":"old/v1","new_api":"new/v2","old_manifest":{"replicas":3,"minAvailable":2,"selector":{"app":"web"}},"new_manifest":{"desiredReplicas":2,"availability":{"minimumReady":2},"selector":{"app":"web"}}}
+]
