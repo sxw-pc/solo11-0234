@@ -69,5 +69,6 @@ class Workflows(unittest.TestCase):
         self.assertEqual(migration.run(self.db,dict(op='anchor',id='a',migration='m',node='n',node_version='1.29',config_version=''))['reason'],'incomplete_anchor')
         self.assertEqual(migration.run(self.db,dict(op='rollback',id='a'))['reason'],'missing_anchor')
 
+assert Path(cloudlab.__file__).resolve().is_relative_to(Path(__file__).resolve().parents[1])
 print('imported_module_file=',cloudlab.__file__)
 if __name__=='__main__':unittest.main()
