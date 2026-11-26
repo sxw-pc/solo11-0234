@@ -1,5 +1,6 @@
 import json
 from .store import transaction,record,audit_run
+from . import wave_approval
 
 @audit_run('wave')
 def run(db,x):
@@ -9,6 +10,15 @@ def run(db,x):
             if x['max_unavailable']<1 or any(not isinstance(v,int) or v<1 for v in budgets.values()):
                 return {'decision':'blocked','reason':'invalid_availability_budget'}
             db.execute('INSERT INTO waves VALUES(?,?,?,?,?,?)',(x['id'],x['target'],x.get('parent'),x['max_unavailable'],json.dumps(budgets,sort_keys=True),'planned'))
+            # A plan may name its risk request / formal budget revision /
+            # emergency permit up front; the binding is what release checks.
+            ref=wave_approval.payload_ref(x) or {}
+            ref_zone=ref.pop('zone',None)
+            if any(ref.get(k) for k in ('request_id','revision_id','permit_id')):
+                zone=ref_zone or x.get('zone')
+                if zone is None and len(budgets)==1:
+                    zone=next(iter(budgets))
+                wave_approval._bind_wave(db,x['id'],zone=zone,at=x.get('at'),**ref)
             record(db,'wave',x['id'],'plan',1,x)
             return {'decision':'planned'}
         wave=db.execute('SELECT * FROM waves WHERE id=?',(x['id'],)).fetchone()
@@ -37,14 +47,35 @@ def run(db,x):
             if x.get('zone',node['zone'])!=node['zone']:
                 return {'decision':'blocked','reason':'zone_identity_conflict'}
             budgets=json.loads(wave['zone_budgets'])
-            limit=budgets.get(node['zone'],wave['max_unavailable'])
+            declared_limit=budgets.get(node['zone'],wave['max_unavailable'])
             existing=db.execute("SELECT COUNT(*) FROM transitions WHERE wave_id=? AND state='applying'",(x['id'],)).fetchone()[0]
-            zone=db.execute("SELECT COUNT(*) FROM transitions WHERE zone=? AND state='applying'",(node['zone'],)).fetchone()[0]
-            if existing>=wave['max_unavailable'] or zone>=limit:return {'decision':'blocked','reason':'availability_budget'}
+            zone_count=db.execute("SELECT COUNT(*) FROM transitions WHERE zone=? AND state='applying'",(node['zone'],)).fetchone()[0]
+            guard_at=x.get('now',node['verified_at'])
+            # Connect occupancy to the EFFECTIVE budget version / emergency
+            # permit.  Zones with no governance trace and a declared limit of
+            # one follow the exact legacy arithmetic.  A declared limit above
+            # the one-node baseline needs a real independent approval.
+            guard=wave_approval.occupancy_guard(
+                db,wave_id=x['id'],zone=node['zone'],at=guard_at,
+                declared_limit=declared_limit,zone_count=zone_count,
+                ref=wave_approval.payload_ref(x),service=x.get('service'))
+            # The plan-declared budget is an upper operational bound; the
+            # governance cap may tighten it (zero head, expired emergency) but
+            # never loosens it beyond what the plan itself declared.
+            limit=min(declared_limit,guard['cap']) if guard.get('governed') else declared_limit
+            if existing>=wave['max_unavailable'] or zone_count>=limit:
+                if existing<wave['max_unavailable'] and zone_count>=limit and guard.get('reason'):
+                    return {'decision':'blocked','reason':guard['reason'],
+                            'budget_gate':'availability_budget',
+                            'authorization':wave_approval.guard_public(guard)}
+                return {'decision':'blocked','reason':'availability_budget'}
             released_at=x.get('now',node['verified_at'])
             if released_at<node['verified_at']:return {'decision':'blocked','reason':'release_before_verification'}
             db.execute('INSERT INTO transitions VALUES(?,?,?,?,?,?,?)',(x['transition'],x['id'],x['node'],node['zone'],node['generation'],released_at,'applying'))
             db.execute("UPDATE waves SET state='applying' WHERE id=?",(x['id'],))
+            wave_approval.record_occupancy(
+                db,transition_id=x['transition'],wave_id=x['id'],node_id=x['node'],
+                zone=node['zone'],at=released_at,guard=guard)
             record(db,'wave',x['transition'],'release',1,x)
             return {'decision':'released'}
         if x['op']=='finish':

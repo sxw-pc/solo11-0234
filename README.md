@@ -37,3 +37,20 @@ python -m cloudlab wave --db isolated.sqlite --fixture fixtures/wave_ok.json
 1. 已迁移的废弃 API 引用不再阻断节点验证；回滚后重新进入阻断清单。
 2. 同一故障域的第二台节点在预算为一时不能释放升级，即使请求伪造地域或扩大预算。
 3. 升级释放占用预算，目标版本健康探针通过后才可完成；失败探针、节点重建或无效回滚锚点均保留阻断证据。
+
+## 风险申请、独立审批与生效版本（`wave_approval`）
+
+`risk_request.propose` 锁定服务、原额度版本（`base_version`）、目标额度、区位、维护窗和受益客户，并生成 canonical 摘要；`risk_sign.sign` 把外部/设备签名固定到该摘要。`wave_approval` 不把“两个签名”当成“两个独立责任人”：
+
+- 席位有任期、绝对额度上限/增幅、区位与服务范围；代理授权有范围、生效授予时间和**生效撤销时间**（回单可以晚到，权限按签署时刻与生效时间判定）。
+- 技术账户、法人账户和多层代理链都回溯到同一**最终控制人**；同一控制人名下的多签只算一个独立责任组。
+- `activate` 先做乐观版本比较：申请锁定的 `base_version` 必须等于 `(service, zone)` 当前预算头，否则返回 `stale_base_version`/`competing_revision`，旧申请不能越过先提交的合法修订。
+- 正式批准要求足够数量、角色齐备且控制人互异的合格签署，随后追加一条不可变 `budget_revisions`；`wave` 释放时以 `min(计划额度, 生效额度+有效紧急额度)` 为准，并为每个 `transition` 写 `release_attributions`。
+- 值班负责人凭已核实事故单可签发 `issue_emergency`：最多 `+1`、必须有 `valid_until`、由客户代表 `review_emergency`。到期或复核失败后新占用被挡（`emergency_permit_expired` / `emergency_review_failed`），已发生的释放与签发人责任保留。
+- `accountability(wave_id=...)` 输出每份已实施额度由哪些互异控制人、经何种文书（正式修订/紧急许可）共同负担。
+
+签署流水 `risk_signatures`、`approval_ledger` 与 `budget_revisions` 由 SQLite 触发器禁止 UPDATE/DELETE；迟到撤销只改变后续资格判定，不涂改旧外部签署和已发生的升级。完整夜场 R（第 18/19/20/21/22 分钟事实、紧急路线与重基线正式路线、断网补签、竞争修订）见 `tests/test_wave_approval.py`。
+
+```sh
+python -B -m unittest discover -s tests -q
+```
