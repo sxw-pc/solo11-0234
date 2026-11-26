@@ -8,7 +8,7 @@ def run(db,x):
             budgets=x.get('zone_budgets',{})
             if x['max_unavailable']<1 or any(not isinstance(v,int) or v<1 for v in budgets.values()):
                 return {'decision':'blocked','reason':'invalid_availability_budget'}
-            db.execute('INSERT INTO waves VALUES(?,?,?,?,?,?)',(x['id'],x['target'],x.get('parent'),x['max_unavailable'],json.dumps(budgets,sort_keys=True),'planned'))
+            db.execute('INSERT INTO waves(id,target,parent,max_unavailable,zone_budgets,state) VALUES(?,?,?,?,?,?)',(x['id'],x['target'],x.get('parent'),x['max_unavailable'],json.dumps(budgets,sort_keys=True),'planned'))
             record(db,'wave',x['id'],'plan',1,x)
             return {'decision':'planned'}
         wave=db.execute('SELECT * FROM waves WHERE id=?',(x['id'],)).fetchone()
@@ -43,7 +43,7 @@ def run(db,x):
             if existing>=wave['max_unavailable'] or zone>=limit:return {'decision':'blocked','reason':'availability_budget'}
             released_at=x.get('now',node['verified_at'])
             if released_at<node['verified_at']:return {'decision':'blocked','reason':'release_before_verification'}
-            db.execute('INSERT INTO transitions VALUES(?,?,?,?,?,?,?)',(x['transition'],x['id'],x['node'],node['zone'],node['generation'],released_at,'applying'))
+            db.execute('INSERT INTO transitions(id,wave_id,node_id,zone,node_generation,released_at,state) VALUES(?,?,?,?,?,?,?)',(x['transition'],x['id'],x['node'],node['zone'],node['generation'],released_at,'applying'))
             db.execute("UPDATE waves SET state='applying' WHERE id=?",(x['id'],))
             record(db,'wave',x['transition'],'release',1,x)
             return {'decision':'released'}
@@ -51,17 +51,25 @@ def run(db,x):
             row=db.execute('SELECT * FROM transitions WHERE id=?',(x['transition'],)).fetchone()
             if not row:return {'decision':'blocked','reason':'unknown_transition'}
             if row['wave_id']!=x['id']:return {'decision':'blocked','reason':'wrong_wave'}
-            if row['state']=='complete':return {'decision':'reused','state':'complete'}
+            if row['state']=='complete':
+                finished_at = row['completed_at'] if 'completed_at' in row.keys() else row['finished_at']
+                return {'decision':'reused','state':'complete','completed_at':finished_at}
             node=db.execute('SELECT * FROM nodes WHERE id=?',(row['node_id'],)).fetchone()
             if not node or node['generation']!=row['node_generation']:
                 return {'decision':'blocked','reason':'stale_node_generation'}
             probe=db.execute('SELECT * FROM transition_probes WHERE transition_id=? ORDER BY at DESC,id DESC LIMIT 1',(row['id'],)).fetchone()
             if not probe or not probe['healthy'] or probe['target']!=wave['target'] or probe['node_generation']!=node['generation']:
                 return {'decision':'blocked','reason':'target_health_unverified'}
-            db.execute("UPDATE transitions SET state='complete' WHERE id=?",(x['transition'],))
+            finished_at=x.get('at',x.get('finished_at',x.get('completed_at',probe['at'])))
+            db.execute("UPDATE transitions SET state='complete',finished_at=?,completed_at=? WHERE id=?",
+                       (finished_at,finished_at,x['transition']))
             db.execute('UPDATE nodes SET version=?,verified_at=NULL WHERE id=?',(wave['target'],row['node_id']))
             left=db.execute("SELECT COUNT(*) FROM transitions WHERE wave_id=? AND state='applying'",(x['id'],)).fetchone()[0]
-            if left==0:db.execute("UPDATE waves SET state='complete' WHERE id=?",(x['id'],))
+            wave_completed_at=None
+            if left==0:
+                db.execute("UPDATE waves SET state='complete',completed_at=?,finished_at=? WHERE id=?",
+                           (finished_at,finished_at,x['id']))
+                wave_completed_at=finished_at
             record(db,'wave',x['transition'],'finish',2,x)
-            return {'decision':'complete'}
+            return {'decision':'complete','completed_at':finished_at,'wave_completed_at':wave_completed_at}
         raise ValueError(x['op'])
