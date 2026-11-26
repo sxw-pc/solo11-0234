@@ -63,5 +63,14 @@ def run(db,x):
             left=db.execute("SELECT COUNT(*) FROM transitions WHERE wave_id=? AND state='applying'",(x['id'],)).fetchone()[0]
             if left==0:db.execute("UPDATE waves SET state='complete' WHERE id=?",(x['id'],))
             record(db,'wave',x['transition'],'finish',2,x)
-            return {'decision':'complete'}
+            # 波次完成只写节点版本事实; 旧磁盘/备份卷的客户数据处置属于保管交割,
+            # 没有擦除/托管证书的介质只能标 pending, 不得视为已清空。
+            media=[dict(r) for r in db.execute(
+                'SELECT * FROM media WHERE node_id=? OR wave_id=? OR id IN (SELECT media_id FROM block_placement) OR id IN (SELECT media_id FROM case_media) ORDER BY id',
+                (row['node_id'],x['id']))]
+            settled=[m['id'] for m in media if m['state'] in ('erased','sealed')]
+            pending=[m['id'] for m in media if m['state'] not in ('erased','sealed')]
+            result={'decision':'complete'}
+            if media:result['media_disposition']={'settled':settled,'pending':pending}
+            return result
         raise ValueError(x['op'])
