@@ -4,6 +4,9 @@ from .store import transaction,record,audit_run
 @audit_run('wave')
 def run(db,x):
     with transaction(db):
+        if x['op'] in ('maintenance_receipt','external_receipt','receipt','record_maintenance'):
+            from .legal_request import record_maintenance_receipt
+            return record_maintenance_receipt(db,x)
         if x['op']=='plan':
             budgets=x.get('zone_budgets',{})
             if x['max_unavailable']<1 or any(not isinstance(v,int) or v<1 for v in budgets.values()):
@@ -43,7 +46,25 @@ def run(db,x):
             if existing>=wave['max_unavailable'] or zone>=limit:return {'decision':'blocked','reason':'availability_budget'}
             released_at=x.get('now',node['verified_at'])
             if released_at<node['verified_at']:return {'decision':'blocked','reason':'release_before_verification'}
-            db.execute('INSERT INTO transitions VALUES(?,?,?,?,?,?,?)',(x['transition'],x['id'],x['node'],node['zone'],node['generation'],released_at,'applying'))
+            x['released_at']=released_at
+            db.execute('''INSERT INTO transitions(id,wave_id,node_id,zone,node_generation,released_at,state)
+                          VALUES(?,?,?,?,?,?,?)''',(x['transition'],x['id'],x['node'],node['zone'],node['generation'],released_at,'applying'))
+            customer_id=x.get('customer_id') or x.get('customer')
+            service=x.get('service') or x.get('workload')
+            db.execute('''UPDATE transitions SET customer_id=?, service=?, migration_id=?, command_id=?
+                          WHERE id=?''',
+                       (customer_id,service,x.get('migration_id') or x.get('migration'),
+                        x.get('command_id'),x['transition']))
+            if customer_id:
+                from .legal_request import attribute_customer
+                attribute_customer(db,{
+                    'mapping_id': f'auto-transition-{x["transition"]}',
+                    'command_id': f'auto-transition-{x["transition"]}',
+                    'customer_id':customer_id,'service':service,
+                    'subject_type':'transition','subject_id':x['transition'],
+                    'source':'wave_release_payload','basis':'recorded_with_original_event',
+                    'at':released_at,
+                })
             db.execute("UPDATE waves SET state='applying' WHERE id=?",(x['id'],))
             record(db,'wave',x['transition'],'release',1,x)
             return {'decision':'released'}

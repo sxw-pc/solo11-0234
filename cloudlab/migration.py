@@ -15,13 +15,35 @@ def run(db,x):
             return {'decision':'registered'}
         if x['op']=='verify':
             baseline=db.execute('SELECT * FROM workload_configs WHERE workload=?',(x['workload'],)).fetchone()
-            if not baseline or baseline['state'] not in ('baseline','restored'):
+            if not baseline or baseline['state'] not in ('baseline','restored','active'):
                 return {'decision':'blocked','reason':'missing_config_baseline'}
             expected=json.dumps(effective(x['old_manifest'],x['old_api']),sort_keys=True)
             observed=json.dumps(effective(x['new_manifest'],x['new_api']),sort_keys=True)
             state='verified' if expected==observed else 'rejected'
-            db.execute('INSERT INTO migrations VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET observed=excluded.observed,baseline_config=excluded.baseline_config,state=excluded.state',
+            db.execute('''INSERT INTO migrations(id,workload,old_api,new_api,expected,observed,baseline_config,state)
+                          VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET observed=excluded.observed,baseline_config=excluded.baseline_config,state=excluded.state''',
                        (x['id'],x['workload'],x['old_api'],x['new_api'],expected,observed,baseline['version'],state))
+            occurred_at=x.get('at',x.get('occurred_at',x.get('now')))
+            customer_id=x.get('customer_id') or x.get('customer')
+            service=x.get('service') or x.get('service_id') or x['workload']
+            db.execute('''UPDATE migrations SET occurred_at=?, customer_id=?, service=?,
+                node_id=?, wave_id=?, transition_id=?, command_id=? WHERE id=?''',
+                       (occurred_at,customer_id,service,x.get('node_id') or x.get('node'),
+                        x.get('wave_id') or x.get('wave'),x.get('transition_id') or x.get('transition'),
+                        x.get('command_id'),x['id']))
+            if customer_id:
+                # Original-event attribution is append-only.  Late mappings go
+                # through legal_request.attribute_customer and never rewrite
+                # this migration row or its evidence bytes.
+                from .legal_request import attribute_customer
+                attribute_customer(db,{
+                    'mapping_id': f'auto-migration-{x["id"]}',
+                    'command_id': f'auto-migration-{x["id"]}',
+                    'customer_id': customer_id,'service':service,
+                    'subject_type':'migration','subject_id':x['id'],
+                    'source':'migration_payload','basis':'recorded_with_original_event',
+                    'at':occurred_at or 0,
+                })
             if state=='verified':
                 db.execute('INSERT INTO workload_configs VALUES(?,?,?) ON CONFLICT(workload) DO UPDATE SET version=excluded.version,state=excluded.state',(x['workload'],x.get('new_config_version','migrated'),'active'))
             db.execute("UPDATE api_usage SET state='migrated' WHERE workload=? AND api=? AND ?='verified'",(x['workload'],x['old_api'],state))
