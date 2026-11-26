@@ -26,4 +26,19 @@ def run(db,x):
             db.execute('UPDATE nodes SET verified_at=? WHERE id=?',(x['now'],x['id']))
             record(db,'inventory',x['id'],'verify',node['generation'],x)
             return {'decision':'verified'}
+        if x['op']=='runtime_load':
+            node=db.execute('SELECT * FROM nodes WHERE id=?',(x['id'],)).fetchone()
+            if not node:return {'decision':'blocked','reason':'unknown_node'}
+            if x['generation']!=node['generation']:
+                return {'decision':'blocked','reason':'stale_generation'}
+            for comp in x['components']:
+                missing=[k for k in ('component','source_revision','component_digest','layer_digest','signature') if not comp.get(k)]
+                if missing:return {'decision':'blocked','reason':'incomplete_load_proof','missing':missing}
+            db.execute('INSERT INTO runtime_attestations VALUES(?,?,?) ON CONFLICT(node_id,generation) DO UPDATE SET attested_at=excluded.attested_at',
+                       (x['id'],x['generation'],x['at']))
+            for comp in x['components']:
+                db.execute('INSERT INTO runtime_loads VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(node_id,generation,component) DO UPDATE SET source_revision=excluded.source_revision,component_digest=excluded.component_digest,layer_digest=excluded.layer_digest,signature=excluded.signature,observed_at=excluded.observed_at',
+                           (x['id'],x['generation'],comp['component'],comp['source_revision'],comp['component_digest'],comp['layer_digest'],comp['signature'],x['at']))
+            record(db,'inventory',x['id'],'runtime_load',x['generation'],x)
+            return {'decision':'attested','components':[c['component'] for c in x['components']]}
         raise ValueError(x['op'])

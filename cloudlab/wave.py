@@ -43,7 +43,7 @@ def run(db,x):
             if existing>=wave['max_unavailable'] or zone>=limit:return {'decision':'blocked','reason':'availability_budget'}
             released_at=x.get('now',node['verified_at'])
             if released_at<node['verified_at']:return {'decision':'blocked','reason':'release_before_verification'}
-            db.execute('INSERT INTO transitions VALUES(?,?,?,?,?,?,?)',(x['transition'],x['id'],x['node'],node['zone'],node['generation'],released_at,'applying'))
+            db.execute("INSERT INTO transitions(id,wave_id,node_id,zone,node_generation,released_at,state,artifact_id) VALUES(?,?,?,?,?,?,?,?)",(x['transition'],x['id'],x['node'],node['zone'],node['generation'],released_at,'applying',x.get('artifact')))
             db.execute("UPDATE waves SET state='applying' WHERE id=?",(x['id'],))
             record(db,'wave',x['transition'],'release',1,x)
             return {'decision':'released'}
@@ -51,6 +51,8 @@ def run(db,x):
             row=db.execute('SELECT * FROM transitions WHERE id=?',(x['transition'],)).fetchone()
             if not row:return {'decision':'blocked','reason':'unknown_transition'}
             if row['wave_id']!=x['id']:return {'decision':'blocked','reason':'wrong_wave'}
+            if x.get('artifact') and row['artifact_id'] and x['artifact']!=row['artifact_id']:
+                return {'decision':'blocked','reason':'artifact_identity_conflict'}
             if row['state']=='complete':return {'decision':'reused','state':'complete'}
             node=db.execute('SELECT * FROM nodes WHERE id=?',(row['node_id'],)).fetchone()
             if not node or node['generation']!=row['node_generation']:
@@ -63,5 +65,5 @@ def run(db,x):
             left=db.execute("SELECT COUNT(*) FROM transitions WHERE wave_id=? AND state='applying'",(x['id'],)).fetchone()[0]
             if left==0:db.execute("UPDATE waves SET state='complete' WHERE id=?",(x['id'],))
             record(db,'wave',x['transition'],'finish',2,x)
-            return {'decision':'complete'}
+            return {'decision':'complete','artifact':row['artifact_id'],'node':row['node_id'],'target':wave['target']}
         raise ValueError(x['op'])

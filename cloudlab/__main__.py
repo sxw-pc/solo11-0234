@@ -5,10 +5,14 @@ from .store import connect,report,replay
 from . import inventory
 from . import wave
 from . import migration
+from . import source_custody
+from . import source_delivery
+
+MODULES=("inventory","wave","migration","source_custody","source_delivery")
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('command',choices=["inventory","wave","migration","demo","report","replay"])
+    parser.add_argument('command',choices=list(MODULES)+["demo","report","replay"])
     parser.add_argument('--db',default='demo.sqlite')
     parser.add_argument('--fixture')
     args=parser.parse_args()
@@ -19,7 +23,7 @@ def main():
         result=report(db)
     elif args.command=='replay':
         db.close()
-        result=replay(args.db,{name:globals()[name] for name in ["inventory","wave","migration"]})
+        result=replay(args.db,{name:globals()[name] for name in MODULES})
     elif args.command=='demo':
         result=[]
         for name,filename in [
