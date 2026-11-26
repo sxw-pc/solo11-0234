@@ -5,6 +5,7 @@ from .store import connect,report,replay
 from . import inventory
 from . import wave
 from . import migration
+from . import object_custody
 
 def main():
     parser=argparse.ArgumentParser()
@@ -19,7 +20,9 @@ def main():
         result=report(db)
     elif args.command=='replay':
         db.close()
-        result=replay(args.db,{name:globals()[name] for name in ["inventory","wave","migration"]})
+        modules={name:globals()[name] for name in ["inventory","wave","migration","object_custody"]}
+        modules['custody']=object_custody
+        result=replay(args.db,modules)
     elif args.command=='demo':
         result=[]
         for name,filename in [
