@@ -14,14 +14,33 @@ def run(db,x):
         wave=db.execute('SELECT * FROM waves WHERE id=?',(x['id'],)).fetchone()
         if not wave:return {'decision':'blocked','reason':'unknown_wave'}
         if x['op']=='probe':
+            existing_probe=db.execute('SELECT * FROM transition_probes WHERE id=?',(x['probe'],)).fetchone()
+            if existing_probe:
+                transition=db.execute('SELECT * FROM transitions WHERE id=?',(existing_probe['transition_id'],)).fetchone()
+                same_core=(transition and transition['wave_id']==x['id']
+                           and existing_probe['transition_id']==x['transition']
+                           and existing_probe['node_generation']==x['generation']
+                           and existing_probe['target']==x['target']
+                           and existing_probe['at']==x['at']
+                           and existing_probe['healthy']==int(bool(x['healthy'])))
+                category=x.get('fault_category',x.get('category'))
+                if category is not None and existing_probe['fault_category'] not in (None,category):
+                    same_core=False
+                if same_core:
+                    return {'decision':'healthy' if existing_probe['healthy'] else 'unhealthy'}
+                return {'decision':'blocked','reason':'probe_conflict'}
             transition=db.execute('SELECT * FROM transitions WHERE id=? AND wave_id=?',(x['transition'],x['id'])).fetchone()
             node=db.execute('SELECT * FROM nodes WHERE id=?',(transition['node_id'],)).fetchone() if transition else None
             if not transition or transition['state']!='applying' or not node or node['generation']!=transition['node_generation']:
                 return {'decision':'blocked','reason':'stale_transition'}
             if x['generation']!=node['generation'] or x['target']!=wave['target'] or x['at']<transition['released_at']:
                 return {'decision':'blocked','reason':'probe_identity_or_time'}
-            db.execute('INSERT INTO transition_probes VALUES(?,?,?,?,?,?)',
-                       (x['probe'],x['transition'],x['generation'],x['target'],x['at'],int(x['healthy'])))
+            db.execute("""INSERT INTO transition_probes
+                          (id,transition_id,node_generation,target,at,healthy,fault_category,detail_json)
+                          VALUES(?,?,?,?,?,?,?,?)""",
+                       (x['probe'],x['transition'],x['generation'],x['target'],x['at'],int(x['healthy']),
+                        x.get('fault_category',x.get('category')),
+                        json.dumps(x.get('detail',{}),sort_keys=True)))
             record(db,'wave',x['probe'],'probe',x['generation'],x)
             return {'decision':'healthy' if x['healthy'] else 'unhealthy'}
         if x['op']=='release':
