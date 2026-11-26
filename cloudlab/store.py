@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import hashlib
 from contextlib import contextmanager
 
 def connect(filename):
@@ -44,22 +45,68 @@ def audit_run(subsystem):
         return wrapped
     return decorate
 
-def replay(filename, modules):
-    source=connect(filename)
-    decisions=[dict(row) for row in source.execute("SELECT subsystem,detail FROM evidence WHERE event='decision' ORDER BY id")]
-    target=connect(':memory:')
+def fingerprint(obj):
+    """Stable SHA-256 over the canonical JSON encoding of a fact."""
+    return hashlib.sha256(json.dumps(obj,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()
+
+def digest_bytes(raw):
+    if isinstance(raw,str):raw=raw.encode('utf-8')
+    return hashlib.sha256(raw).hexdigest()
+
+def _decision_log(db):
+    return [dict(row) for row in db.execute("SELECT subsystem,detail FROM evidence WHERE event='decision' ORDER BY id")]
+
+def _apply_decisions(decisions,target,modules):
     divergences=[]
     for index,entry in enumerate(decisions,1):
         fact=json.loads(entry['detail'])
-        actual=modules[entry['subsystem']].run(target,fact['input'])
+        module=modules.get(entry['subsystem'])
+        if module is None:
+            divergences.append({'step':index,'subsystem':entry['subsystem'],'reason':'missing_module'})
+            continue
+        actual=module.run(target,fact['input'])
         if actual!=fact['result']:
             divergences.append({'step':index,'subsystem':entry['subsystem'],'expected':fact['result'],'actual':actual})
+    return divergences
+
+def _compare_tables(source,target):
+    divergences=[]
     tables=[r[0] for r in source.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('evidence','sqlite_sequence') ORDER BY name")]
     for table in tables:
-        if not target.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():
-            divergences.append({'table':table,'reason':'missing_in_replay'});continue
         before=[tuple(r) for r in source.execute('SELECT * FROM '+table+' ORDER BY rowid')]
+        if not target.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():
+            # An empty source table is scaffolding created lazily, not a decision.
+            if not before:continue
+            divergences.append({'table':table,'reason':'missing_in_replay'});continue
         after=[tuple(r) for r in target.execute('SELECT * FROM '+table+' ORDER BY rowid')]
+        # Empty tables are scaffolding, not decisions: only populated state has
+        # to be reproduced from the evidence log.
+        if not before and not after:continue
         if before!=after:divergences.append({'table':table,'reason':'state_mismatch','before':before,'after':after})
+    return divergences
+
+def replay(filename, modules):
+    source=connect(filename)
+    target=connect(':memory:')
+    divergences=_apply_decisions(_decision_log(source),target,modules)
+    divergences+=_compare_tables(source,target)
+    count=len(_decision_log(source))
     source.close();target.close()
-    return {'decision_count':len(decisions),'verified':not divergences,'divergences':divergences}
+    return {'decision_count':count,'verified':not divergences,'divergences':divergences}
+
+def rebuild(filename, modules):
+    """Reconstruct both real ledgers in a fresh database from the evidence log.
+
+    Used by audit and power-outage retries: no page, payable, invoice, provision
+    or deposit row is trusted unless a signed decision recreates it.
+    """
+    source=connect(filename)
+    target=connect(':memory:')
+    decisions=_decision_log(source)
+    divergences=_apply_decisions(decisions,target,modules)
+    divergences+=_compare_tables(source,target)
+    source.close()
+    return target,{'decision_count':len(decisions),'verified':not divergences,'divergences':divergences}
+
+def snapshot_tables(db, names):
+    return {name:[tuple(r) for r in db.execute('SELECT * FROM '+name+' ORDER BY rowid')] for name in names}

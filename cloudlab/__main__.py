@@ -5,10 +5,11 @@ from .store import connect,report,replay
 from . import inventory
 from . import wave
 from . import migration
+from . import physical_meter
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('command',choices=["inventory","wave","migration","demo","report","replay"])
+    parser.add_argument('command',choices=["inventory","wave","migration","physical","demo","report","replay"])
     parser.add_argument('--db',default='demo.sqlite')
     parser.add_argument('--fixture')
     args=parser.parse_args()
@@ -19,7 +20,7 @@ def main():
         result=report(db)
     elif args.command=='replay':
         db.close()
-        result=replay(args.db,{name:globals()[name] for name in ["inventory","wave","migration"]})
+        result=replay(args.db,{name:globals()[name] for name in ["inventory","wave","migration"]} | {'physical':physical_meter})
     elif args.command=='demo':
         result=[]
         for name,filename in [
@@ -29,6 +30,10 @@ def main():
             file=Path('fixtures')/filename
             payload=json.loads(file.read_text(encoding='utf-8'))
             result.append({'fixture':str(file),'result':invoke(globals()[name],payload)})
+    elif args.command=='physical':
+        if not args.fixture: parser.error('--fixture is required')
+        payload=json.loads(Path(args.fixture).read_text(encoding='utf-8'))
+        result=invoke(physical_meter,payload)
     else:
         if not args.fixture: parser.error('--fixture is required')
         payload=json.loads(Path(args.fixture).read_text(encoding='utf-8'))

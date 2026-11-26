@@ -1,9 +1,42 @@
 import json
-from .store import transaction,record,audit_run
+from .store import transaction,record,audit_run,fingerprint
+
+def init(db):
+    db.execute('CREATE TABLE IF NOT EXISTS physical_windows(id TEXT PRIMARY KEY,wave_id TEXT,serial TEXT,from_minute INTEGER,to_minute INTEGER,digest TEXT)')
+    db.execute('CREATE TABLE IF NOT EXISTS vm_motions(id TEXT PRIMARY KEY,window_id TEXT,serial TEXT,container TEXT,from_minute INTEGER,to_minute INTEGER,barcode TEXT,digest TEXT)')
 
 @audit_run('wave')
 def run(db,x):
     with transaction(db):
+        init(db)
+        if x['op']=='physical_window':
+            old=db.execute('SELECT digest FROM physical_windows WHERE id=?',(x['id'],)).fetchone()
+            payload={'wave_id':x['wave_id'],'serial':x['serial'],'from_minute':x['from_minute'],'to_minute':x['to_minute']}
+            digest=fingerprint(payload)
+            if old:
+                if old['digest']!=digest:return {'decision':'blocked','reason':'window_conflict'}
+                return {'decision':'replay','digest':digest}
+            db.execute('INSERT INTO physical_windows VALUES(?,?,?,?,?,?)',
+                       (x['id'],x['wave_id'],x['serial'],x['from_minute'],x['to_minute'],digest))
+            record(db,'wave',x['id'],'physical_window',1,payload)
+            return {'decision':'registered','digest':digest}
+        if x['op']=='vm_motion':
+            old=db.execute('SELECT digest FROM vm_motions WHERE id=?',(x['id'],)).fetchone()
+            window=db.execute('SELECT * FROM physical_windows WHERE id=?',(x['window_id'],)).fetchone()
+            if not window:return {'decision':'blocked','reason':'unknown_physical_window'}
+            payload={'window_id':x['window_id'],'serial':x['serial'],'container':x['container'],
+                     'from_minute':x['from_minute'],'to_minute':x['to_minute'],'barcode':x['barcode']}
+            digest=fingerprint(payload)
+            if old:
+                if old['digest']!=digest:return {'decision':'blocked','reason':'motion_conflict'}
+                return {'decision':'replay','digest':digest}
+            if x['serial']!=window['serial']:return {'decision':'blocked','reason':'motion_host_conflict'}
+            if not (window['from_minute']<=x['from_minute']<=window['to_minute'] and x['to_minute']>x['from_minute']):
+                return {'decision':'blocked','reason':'motion_outside_window'}
+            db.execute('INSERT INTO vm_motions VALUES(?,?,?,?,?,?,?,?)',
+                       (x['id'],x['window_id'],x['serial'],x['container'],x['from_minute'],x['to_minute'],x['barcode'],digest))
+            record(db,'wave',x['id'],'vm_motion',1,payload)
+            return {'decision':'registered','digest':digest}
         if x['op']=='plan':
             budgets=x.get('zone_budgets',{})
             if x['max_unavailable']<1 or any(not isinstance(v,int) or v<1 for v in budgets.values()):
